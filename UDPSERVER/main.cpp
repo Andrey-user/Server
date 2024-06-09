@@ -16,7 +16,6 @@ using namespace std;
 
 int main() 
 {
-    cout<<"Check git"<<endl;    
     UdpServer serv = UdpServer();
     serv.CreateNewConnectionSocket();
     serv.Start();
