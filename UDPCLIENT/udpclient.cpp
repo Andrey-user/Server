@@ -2,30 +2,7 @@
 
 UdpClient::UdpClient()
 {
-    cout<<"Start"<<endl;
-    serverSocket = socket(AF_INET, SOCK_DGRAM, 0);
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(serverport); // Пример порта
-    inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr);
-    cout<<"end"<<endl;
-}
-
-void UdpClient::sendMessage()
-{
-    char buf[1024] = "Hello World";
-    socklen_t serverlen = sizeof(serverAddress);
-    cout<<"serverSocket = "<<serverSocket<<endl;
-    cout<<"LEn = "<<strlen(buf)<<endl;
-    sendto(serverSocket, buf, strlen(buf), 0, (struct sockaddr*)&serverAddress, sizeof(serverAddress));
-    cout<<"Otpravili"<<endl;
-}
-
-void UdpClient::SendTask(Matrix A)
-{
-    socklen_t serverlen = sizeof(serverAddress);
-    cout<<"serverSocket = "<<serverSocket<<endl;
-    ssize_t send = sendto(serverSocket, reinterpret_cast<const char*>(&A) , A.getlength(), 0, (struct sockaddr*)&serverAddress, sizeof(serverAddress));
-    cout<<"Send = "<<send<<endl;
+    this->CreateConnectSocket();
 }
 
 void UdpClient::CreateConnectSocket()
@@ -35,61 +12,53 @@ void UdpClient::CreateConnectSocket()
     Setsockopt(connectSocket, SOL_SOCKET, SO_BROADCAST,reinterpret_cast<const char*>(&mainEnable), sizeof(mainEnable));
     std::memset(&connectAddress, 0, sizeof(connectAddress));
     connectAddress.sin_family = AF_INET;
-    connectAddress.sin_addr.s_addr =  INADDR_BROADCAST; // Пример широковещательного адреса
-    connectAddress.sin_port = htons(connectport); // Пример порт
+    connectAddress.sin_addr.s_addr =  INADDR_BROADCAST;
+    connectAddress.sin_port = htons(connectport);
 }
 
 
 //Попытка первого подклчюения к серверу
 void UdpClient::ConnectToServer()
 {
-    char s[1024];
-    string b;
-    char sendbuf[1024];
+    char  recvbuf[1024];
     socklen_t connectlen = sizeof(this->connectAddress);
-    hash<string> hashfunc;
-    cout<<"Write message, who need send: ";
-    getline(cin,b);
-    strcpy(s,b.c_str());
-    cout<<"s = "<<s<<endl;
-    cout<<"strlen = "<<strlen(s)<<endl;
+    fd_set connect_fd;
+    timeval timeout;
+    while(true)
+    {
+        cout<<"Try to connect the server"<<endl;
+        FD_ZERO(&connect_fd);
+        json send_json = this->CreateJsonObject('c',{0});
+        sendto(connectSocket, send_json.dump().c_str(), send_json.dump().size(), 0, (struct sockaddr*)&connectAddress, connectlen);
 
-
-    // Создание JSON-объекта для отправки
-    json send_json = this->CreateJsonObject('c',{0});
-
-    // Сериализация JSON-объекта и отправка на сервер
-    string send_data = send_json.dump();
-    ssize_t result = Sendto(connectSocket, send_json.dump().c_str(), send_json.dump().size(), 0, (struct sockaddr*)&connectAddress, connectlen);
-
-    //Получение данных с сервера
-    memset(s,0,sizeof(s));
-    ssize_t recv = Recvfrom(connectSocket, s, sizeof(s), 0, (struct sockaddr*)&connectAddress, &connectlen);
-    json response = json::parse(s);
-    
-    //Создание нового подключения
+        FD_SET(connectSocket,&connect_fd);
+        timeout = {5,0};
+        int SocketCount = select(connectSocket+1,&connect_fd,nullptr,nullptr,&timeout);
+        if(SocketCount == 0)
+        {
+            cout<<"No connection"<<endl;
+            continue;
+        }
+        break;   
+    }
+    memset(recvbuf,0,sizeof(recvbuf));
+    ssize_t recv = recvfrom(connectSocket, recvbuf, sizeof(recvbuf), 0, (struct sockaddr*)&connectAddress, &connectlen);
+    json response = json::parse(recvbuf);
     std::memset(&newAddress, 0, sizeof(newAddress));
     newAddress.sin_family = AF_INET;
-    newAddress.sin_addr.s_addr =  INADDR_BROADCAST; // Пример широковещательного адреса
-    newAddress.sin_port = htons(response["port"]); // Пример порт
+    newAddress.sin_addr.s_addr =  INADDR_BROADCAST;
+    newAddress.sin_port = htons(response["port"]);
+    cout<<"Connect to server"<<endl;
     
 
 }
 
+//Отправка заданий серверу и получение ответа
 void UdpClient::Start()
-{
-    thread t1(&UdpClient::SendServer,this);
-    //thread t2(&UdpClient::ListenServer,this);
-    t1.join();
-    //t2.join();
-}
-
-void UdpClient::SendServer()
 {
     char s[1024];
     char recvbuf[2048];
     vector<int> massiv;
-    string b;
     int k;
     int m;
     socklen_t connectlen = sizeof(this->newAddress);
@@ -97,7 +66,6 @@ void UdpClient::SendServer()
     while(true)
     {
         memset(s,0,sizeof(s));
-        b="";
         cout<<"writen amount of elements: ";
         cin>>k;
         massiv.clear();
@@ -108,27 +76,18 @@ void UdpClient::SendServer()
         	massiv.push_back(m);
         }
         json send = CreateJsonObject('t',massiv);
-        cout<<"json_send = "<<send.dump()<<endl;
         result = Sendto(connectSocket, send.dump().c_str(), send.dump().size(), 0, (struct sockaddr*)&newAddress, connectlen);
-        cout<<"result = "<<result<<endl;
-        if(b=="disconnect")
-            return;
+        
+        memset(recvbuf,0,sizeof(recvbuf));
         ssize_t recv = Recvfrom(connectSocket, recvbuf, sizeof(recvbuf), 0, (struct sockaddr*)&newAddress, &connectlen);
-        cout<<endl<<endl<<"Result = "<<recvbuf<<endl<<endl;    
+        recvbuf[recv] = '\0';
+
+        json recvjson = json::parse(recvbuf);
+        cout<<endl<<"Result = "<<recvjson["data"]<<endl<<endl;    
         
     }
 }
 
-void UdpClient::ListenServer()
-{
-    char recvbuf[1024];
-    socklen_t connectlen = sizeof(this->newAddress);
-    while(true)
-    {
-        ssize_t recv = Recvfrom(connectSocket, recvbuf, sizeof(recvbuf), 0, (struct sockaddr*)&newAddress, &connectlen);
-        cout<<endl<<endl<<"Result = "<<recvbuf<<endl<<endl;
-    }
-}
 
 json UdpClient::CreateJsonObject(char type = 'c',vector<int> massiv = {0})
 {
@@ -138,12 +97,6 @@ json UdpClient::CreateJsonObject(char type = 'c',vector<int> massiv = {0})
         j["type"] = "connect";
         j["name"] = "client";
         j["port"] = 235;
-        return j;
-    }
-    else if(type =='d')
-    {
-        j["type"] = "task";
-        j["data"] = {"1","2","3"};
         return j;
     }
     else if(type =='t')

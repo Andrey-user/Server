@@ -1,17 +1,26 @@
 #include "udpserver.h"
 
 //Конструктор
-UdpServer::UdpServer()
+UdpServer::UdpServer(int newConnectionPort)
 {
-    FD_ZERO(&client_fd);
-    FD_ZERO(&calculator_fd);
+    this->CreateNewConnectionSocket(newConnectionPort);
     max_client_fd = 0;
     max_calculator_fd = 0;
 }
 
 
+//Создаем сокет, который будет прослушивать новые подключения
+void UdpServer::CreateNewConnectionSocket(int newConnectionPort)
+{
+    newConnectionSocket = Socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    std::memset(&newConnectionAddress, 0, sizeof(newConnectionAddress));
+    newConnectionAddress.sin_family = AF_INET;
+    newConnectionAddress.sin_addr.s_addr = INADDR_ANY; // Пример широковещательного адреса
+    newConnectionAddress.sin_port = htons(newConnectionPort); // Пример порта<<"
+    Bind(newConnectionSocket, (struct sockaddr *) &newConnectionAddress, sizeof newConnectionAddress); 
+} 
 
-//Основной метод запусмкающий работу сервера
+//Основной метод запускающий работу сервера
 void UdpServer::Start()
 {
     thread t1(&UdpServer::ServerSettings,this);
@@ -28,28 +37,20 @@ void UdpServer::Start()
     t6.join();
 }
 
-//Прослушка новых подключений, и клиентов и калькуляторов, скорее всего будет отдельный поток
+
+//Прослушка новых подключений, и клиентов и калькуляторов
 void UdpServer::ListenNewConnection()
 {
-    char brom[1024];
-    char hoststr[NI_MAXHOST];
-    char portstr[NI_MAXSERV];
-
+    char recvbuf[1024];
     struct sockaddr_in calculatorAddress;
     socklen_t calculatorlen = sizeof(calculatorAddress);
 
-    string send;
-
     while(true)
     {   
-        memset(brom,0,sizeof(brom));
-        ssize_t recv = Recvfrom(newConnectionSocket, brom, sizeof(brom), 0, (struct sockaddr*)&calculatorAddress, &calculatorlen);
-        json respons = json::parse(brom);
-        //cout<<"buffer111111 = "<<endl<<respons.dump()<<endl;
-        getnameinfo((struct sockaddr *)&calculatorAddress, calculatorlen, hoststr, sizeof(hoststr), portstr, sizeof(portstr), NI_NUMERICHOST | NI_NUMERICSERV);
-        //cout<<"NOT AUTORIZATION: data = "<<brom<<"   IP: "<<hoststr<<"   port: "<<portstr<<endl;
+        memset(recvbuf,0,sizeof(recvbuf));
+        ssize_t recv = Recvfrom(newConnectionSocket, recvbuf, sizeof(recvbuf), 0, (struct sockaddr*)&calculatorAddress, &calculatorlen);
+        json respons = json::parse(recvbuf);
         sockaddr_in newAddres = calculatorAddress;
-
 
         if(respons["type"]=="connect")
         {
@@ -62,27 +63,18 @@ void UdpServer::ListenNewConnection()
                 newcalculatoraddress.sin_addr.s_addr = htonl(INADDR_ANY);
                 newcalculatoraddress.sin_port = 0;
 
-                int coolport = htons(calculatorAddress.sin_port);
-                //cout<<"coolport = "<<coolport<<endl;
-
                 Bind(newcalculatorsocket, (struct sockaddr *) &newcalculatoraddress, sizeof (newcalculatoraddress));
                 socklen_t len = sizeof(newcalculatoraddress);
                 Getsockname(newcalculatorsocket,(struct sockaddr*)&newcalculatoraddress, &len);    
                 unique_lock<mutex> lock(mtx_calculator_messages);
                 calccalc.push_back(std::make_tuple(newcalculatorsocket, 0, calculatorAddress));
-                calcs.emplace_back(newcalculatorsocket, calculatorAddress);
                 number_free_calcs++;
-
-                //cout<<"ListenNewConnection:  "<<number_free_calcs<<endl;
                 lock.unlock();
                 int port = ntohs(newcalculatoraddress.sin_port);
-                //cout<<"Port = "<<port<<endl;
-                newcalculators.push_back(newcalculatorsocket);
 
                 json send = CreateJsonObject('c',"server",port);
                 sendto(newConnectionSocket,send.dump().c_str(),send.dump().size(),0,(struct sockaddr*)&calculatorAddress,sizeof(calculatorAddress));
-                
-
+            
                 if (port > max_calculator_fd)
                     max_calculator_fd = port;
                     
@@ -104,7 +96,6 @@ void UdpServer::ListenNewConnection()
                 Getsockname(newclientsocket,(struct sockaddr*)&newclientaddress, &len);
                 clients.emplace_back(newclientsocket, calculatorAddress);
                 int port = ntohs(newclientaddress.sin_port);
-                newclients.push_back(newclientsocket);
 
                 json send = CreateJsonObject('c',"server",port);
                 sendto(newConnectionSocket,send.dump().c_str(),send.dump().size(),0,(struct sockaddr*)&calculatorAddress,sizeof(calculatorAddress));
@@ -115,40 +106,37 @@ void UdpServer::ListenNewConnection()
         }
         else
         {
-            sendto(newConnectionSocket,"no connection",sizeof("no connection"),0,(struct sockaddr*)&calculatorAddress,sizeof(calculatorAddress));
-            cout<<"NoOne registration"<<endl;
+            json send = CreateJsonObject('n');
+            sendto(newConnectionSocket,send.dump().c_str(),send.dump().size(),0,(struct sockaddr*)&calculatorAddress,sizeof(calculatorAddress));
+            cout<<"NoOne connection"<<endl;
         }
 
     }
 }
 
-//Прослушка зарегестрированных
+
+//Прослушка подключенных Клиентов
 void UdpServer::ListenClient()
 {
     char recvbuf[2048];
+    json recvjson;
     struct sockaddr_in clientAddress1;
     socklen_t clientlen1 = sizeof(clientAddress1);
     while(true)
     {
-        //sleep(1);
-        //cout << "Start select" << endl;
         while(max_client_fd==0)
         {
-            //cout<<"max_client = "<<max_client_fd<<endl;
-            //sleep(3);
             if(max_client_fd!=0)
             break;
         }
         timeval timeout = {1, 0};
         FD_ZERO(&client_fd);
-        for(int b : newclients)
+        for(auto& element : clients)
         {
-            FD_SET(b,&client_fd);
+            FD_SET(element.first,&client_fd);
         }
 
         int socketCount = select(max_client_fd + 1, &client_fd, nullptr, nullptr, &timeout);
-        //cout << "END SELECT" << endl;
-        //cout<<"socket_count = "<<socketCount<<endl;
         if (socketCount == 0)
             continue;
 
@@ -156,39 +144,34 @@ void UdpServer::ListenClient()
         {
             if(FD_ISSET(client->first,&client_fd))
             {
-                //sleep(1);
                 memset(recvbuf, 0, sizeof(recvbuf));
-                //cout << "Chitaem" << endl;
                 ssize_t recv = recvfrom(client->first, recvbuf, 2048, 0, (struct sockaddr*)&clientAddress1, &clientlen1);
-                //cout <<"Listen Client: "<< recvbuf << endl;
-                if(recvbuf == "disconnect")
+                recvjson = json::parse(recvbuf);
+                if(recvjson["type"] == "disconnect")
                 {
                     close(client->first);
                     client = clients.erase(client);
                     continue; 
                 }
-
-                 //Вот тут должен будет стоять мьютекс
                 unique_lock<mutex> lock(mtx_calculator_messages);
-                messages_to_calculators.emplace_back(client->first,json::parse(recvbuf));
+                messages_to_calculators.emplace_back(client->first,recvjson);
                 cv_calculator_messages.notify_one();
             }
             ++client;
         }     
     }
-
 }
 
+
+//Прослушка подключенных калькуляторов
 void UdpServer::ListenCalculator()
 {
-    PacketString newpacket;
     char recvbuf[2048];
+    json recvjson;
     struct sockaddr_in clientAddress1;
     socklen_t clientlen1 = sizeof(clientAddress1);
     while(true)
     {
-        //sleep(1);
-        //cout << "Start select" << endl;
         while(max_calculator_fd==0)
         {
             if(max_calculator_fd!=0)
@@ -211,12 +194,9 @@ void UdpServer::ListenCalculator()
             if(FD_ISSET(get<0>(*it),&calculator_fd))
             {
                 memset(recvbuf, 0, sizeof(recvbuf));
-                //cout << "Chitaem" << endl;
-                memset(recvbuf,0,sizeof(recvbuf));
-                memset(newpacket.data,0,sizeof(newpacket.data));
-                ssize_t recv = recvfrom(get<0>(*it), recvbuf, sizeof(newpacket), 0, (struct sockaddr*)&clientAddress1, &clientlen1);
-                //cout <<"Listen Calculator: "<< recvbuf << endl;
-                if(recvbuf == "disconnect")
+                ssize_t recv = recvfrom(get<0>(*it), recvbuf, sizeof(recvbuf), 0, (struct sockaddr*)&clientAddress1, &clientlen1);
+                recvjson = json::parse(recvbuf);
+                if(recvjson["type"] == "disconnect")
                 {
                     unique_lock<mutex> lock(mtx_calculator_messages);
                     close(get<0>(*it));
@@ -227,12 +207,11 @@ void UdpServer::ListenCalculator()
                 unique_lock<mutex> lock(mtx_calculator_messages);
                 number_free_calcs++;
                 cv_calculator_messages.notify_one();
-                //cout<<"ListenCalculator:  "<<number_free_calcs<<endl;
                 int number = get<1>(*it);
                 get<1>(*it) = 0;
                 lock.unlock();
                 unique_lock<mutex> lock1(mtx_client_messages);
-                messages_to_clients.emplace_back(number,json::parse(recvbuf));
+                messages_to_clients.emplace_back(number,recvjson);
                 cv_client_messages.notify_one();
             }
             ++it;
@@ -241,85 +220,50 @@ void UdpServer::ListenCalculator()
     }
 }
 
+
+//Отправка сообщений калькулятороам
 void UdpServer::SendMessageCalculator()
 {
-    PacketString newpacket;
     int sock_number;
     while(true)
     {
         unique_lock<mutex> lock(mtx_calculator_messages);
         cv_calculator_messages.wait(lock, [this] { return !messages_to_calculators.empty() && number_free_calcs>0;});
         while (!messages_to_calculators.empty() && number_free_calcs > 0) {
-            //cout<<"start sending to calculator"<<endl;
             json j = messages_to_calculators.front().second;
             sock_number = messages_to_calculators.front().first;
             messages_to_calculators.erase(messages_to_calculators.begin());
             lock.unlock();
             auto it = std::find_if(calccalc.begin(), calccalc.end(), [](const std::tuple<int, int, sockaddr_in>& elem) {return std::get<1>(elem) == 0;});
             get<1>(*it) = sock_number;
-            //cout<<"socket = "<<get<0>(*it)<<endl;
-            //sendto(get<0>(*it), reinterpret_cast<const char*>(&newpacket) , newpacket.getlength(), 0, (struct sockaddr*)&(get<2>(*it)), sizeof(get<2>(*it)));
             sendto(get<0>(*it), j.dump().c_str(), j.dump().size(), 0, (struct sockaddr*)&(get<2>(*it)), sizeof(get<2>(*it)));
             lock.lock();
             number_free_calcs--;
-            //cout<<"SendMessaageCalculator:  "<<number_free_calcs<<endl;
         }
     }
 }
 
+//Отправка сообщений клиентам
 void UdpServer::SendMessageClient()
 {
-    PacketString newpacket;
     int sock_number;
     while(true)
     {
         unique_lock<mutex> lock1(mtx_client_messages);
         cv_client_messages.wait(lock1, [this] { return !messages_to_clients.empty();});
         while (!messages_to_clients.empty()) {
-            //cout<<"start sending to calculator"<<endl;
             json j = messages_to_clients.front().second;
             sock_number = messages_to_clients.front().first;
             messages_to_clients.erase(messages_to_clients.begin());
             lock1.unlock();
-            //cout<<"socket = "<<get<0>(*it)<<endl;
-            //sendto(get<0>(*it), reinterpret_cast<const char*>(&newpacket) , newpacket.getlength(), 0, (struct sockaddr*)&(get<2>(*it)), sizeof(get<2>(*it)));
             auto element = find_if(clients.begin(), clients.end(), [sock_number](const pair<int, sockaddr_in>& client) 
             {return client.first == sock_number;});
-
             sendto(sock_number, j.dump().c_str(), j.dump().size(), 0, (struct sockaddr*)&(element->second), sizeof(element->second));
             lock1.lock();
-            //cout<<"SendMessaageCalculator:  "<<number_free_calcs<<endl;
         }
     }
 }
 
-
-
-void UdpServer::SendAllClients()
-{
-    cout<<"start"<<endl;
-    for(const auto& client: clients)
-        {
-            cout<<"ok"<<endl;
-            sendto(client.first,"Hello",sizeof("hello"),0,(struct sockaddr*)&(client.second),sizeof(client.second));
-            cout<<"ko"<<endl;
-        }
-    cout<<"end"<<endl;
-}
-
-
-
-
-//Создаем сокет, который будет прослушивать новые подключения
-void UdpServer::CreateNewConnectionSocket()
-{
-    newConnectionSocket = Socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    std::memset(&newConnectionAddress, 0, sizeof(newConnectionAddress));
-    newConnectionAddress.sin_family = AF_INET;
-    newConnectionAddress.sin_addr.s_addr = INADDR_ANY; // Пример широковещательного адреса
-    newConnectionAddress.sin_port = htons(newConnectionPort); // Пример порта<<"
-    Bind(newConnectionSocket, (struct sockaddr *) &newConnectionAddress, sizeof newConnectionAddress); 
-} 
 
 //Вывод информации об активных калькуляторов
 void UdpServer::CalcsInfo()
@@ -352,9 +296,9 @@ void UdpServer::ServerSettings()
     {
         memset(s,0,sizeof(s));
         b="";
-        cout<<"b = ";
+        cout<<"command = ";
         getline(cin,b);
-        cout<<"You write b = "<<b<<endl;
+        cout<<"Write command = "<<b<<endl;
         if (b=="exit")
         {
             exit(1);
@@ -364,37 +308,12 @@ void UdpServer::ServerSettings()
             this->CalcsInfo();
             cout<<"Numer fgfg = "<<number_free_calcs<<endl<<endl;
         }
-        else if (b=="sendcalc")
+        else 
         {
-            cout<<"Helo"<<endl;
-            //this->SendMessageCalculator("Hello");
+            cout<<"Incorrect command"<<endl;
         }
-        else if(b == "messages")
-        {
-            cout<<"Vectors:"<<endl;
-            for(auto& message: messages_to_calculators)
-            {
-                cout<<message.first<<" : "<<message.second.dump()<<endl;
-            }
-            cout<<endl<<endl;
-        }
-        else if (b=="calc")
-        {
-            cout<<"Vectors:"<<endl;
-            for(auto& message: messages_to_clients)
-            {
-                cout<<message.first<<" : "<<message.second.dump()<<endl;
-            }
-            cout<<endl<<endl;
-        }
-        else if(b=="send")
-        {
-            this->SendAllClients();
-        }
-
     }
 }
-
 
 json UdpServer::CreateJsonObject(char type,string name,int port,const void* buf)
 {
@@ -406,10 +325,9 @@ json UdpServer::CreateJsonObject(char type,string name,int port,const void* buf)
         j["port"] = port;
         return j;
     }
-    else if(type =='d')
+    else if (type == 'n')
     {
-        j["type"] = "task";
-        j["data"] = {"1","2","3"};
+        j["type"] = "noconnected";
         return j;
     }
     else

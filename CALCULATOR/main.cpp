@@ -12,7 +12,6 @@ int main()
 {
 
     Calculator calc = Calculator();
-    calc.CreateConnectSocket();
     calc.ConnectToServer();
     calc.GetMessageFromServer();
     return 0;

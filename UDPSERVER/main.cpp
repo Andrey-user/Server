@@ -6,8 +6,6 @@
 #include <iostream>
 #include <netdb.h>
 #include "udpserver.h"
-/*#include <openssl/sha.h>
-#include <openssl/md5.h>*/
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -16,10 +14,8 @@ using namespace std;
 
 int main() 
 {
-    UdpServer serv = UdpServer();
-    serv.CreateNewConnectionSocket();
+    UdpServer serv = UdpServer(20002);
     serv.Start();
-
 
     return 0;
 }

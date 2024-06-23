@@ -17,43 +17,6 @@ using json = nlohmann::json;
 
 using namespace std;
 
-struct Packet
-{
-public:
-    size_t hash;
-    char data[1024];
-    int getlength()
-    {
-        return sizeof(size_t)+strlen(data);
-    }
-};
-
-struct PacketInt
-{
-public:
-    size_t hash;
-    int data;
-    int getlength()
-    {
-        return sizeof(size_t)+sizeof(int);
-    }
-};
-
-struct PacketString
-{
-private:
-    int packettype = 1;
-public:
-    char data[1024];
-    int getlength()
-    {
-        return sizeof(packettype) + strlen(data);
-    }
-};
-
-
-
-
 // Функция для разделения вектора на две части
 int partition(std::vector<int>& vec, int low, int high);
 // Функция быстрой сортировки
@@ -82,8 +45,6 @@ public:
     void CreateConnectSocket();
     void ConnectToServer();
 
-
-    void SendToServer();
     void GetMessageFromServer();
 
     json CreateJsonObject(char type,const void* buf);
